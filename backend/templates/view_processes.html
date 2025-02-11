@@ -54,7 +54,7 @@
           <a href="index.html" class="logo d-flex align-items-center me-auto me-lg-0">
             <!-- Uncomment the line below if you also wish to use an image logo -->
             <!-- <img src="static/img/logo.png" alt=""> -->
-            <h1 class="sitename">GM</h1>
+            <h1 class="sitename">Carbon Footprint</h1>
             <span>.</span>
           </a>
     
@@ -67,15 +67,14 @@
                     <ul>
                       <li><a href="admin_login">Admin</a></li>
                       <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                      <li><a href="auditor_signup">Auditor</a></li>
-                      <li><a href="#">Publice User</a></li>
+                      
                     </ul>
               </li>
             </ul>
             <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
           </nav>
     
-          <a class="btn-getstarted" href="login">Login</a>
+          <a class="btn-getstarted" href="{{ url_for('home') }}">LogOut</a>
     
         </div>
     </header>
@@ -88,6 +87,7 @@
                     <th>Name</th>
                     <th>Energy Consumption</th>
                     <th>Emission Factor</th>
+                    <th>Date</th> <!-- Add Date Column -->
                     <th>Industry</th>
                     <th>Actions</th>
                 </tr>
@@ -99,6 +99,7 @@
                     <td>{{ process.process_name }}</td>
                     <td>{{ process.energy_consumption }}</td>
                     <td>{{ process.emission_factor }}</td>
+                    <td>{{ process.process_date }}</td> <!-- Display Date -->
                     <td>{{ process.industry_name or "Unlinked" }}</td>
                     <td>
                         <a href="{{ url_for('update_process', process_id=process.process_id) }}" class="btn btn-warning btn-sm">Edit</a>
@@ -109,6 +110,7 @@
                 </tr>
                 {% endfor %}
             </tbody>
+            
         </table>
         <a href="index" class="btn btn-primary">Back to Home</a>
     </div>

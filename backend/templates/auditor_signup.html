@@ -24,7 +24,7 @@
     </style>
     <meta charset="utf-8">
   <meta content="width=device-width, initial-scale=1.0" name="viewport">
-  <title>Index - Gp Bootstrap Template</title>
+  <title>Carbon Footprint</title>
   <meta name="description" content="">
   <meta name="keywords" content="">
 
@@ -54,7 +54,7 @@
         <div class="container-fluid container-xl position-relative d-flex align-items-center justify-content-between">
     
           <a href="index.html" class="logo d-flex align-items-center me-auto me-lg-0">
-            <h1 class="sitename">GP</h1>
+            <h1 class="sitename">Carbon Footprint</h1>
             <span>.</span>
           </a>
     
@@ -67,8 +67,8 @@
                     <ul>
                       <li><a href="adm{{ url_for('admin_login') }}">Admin</a></li>
                       <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                      <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
-                      <li><a href="#">Public User</a></li>
+                      <!-- <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
+                      <li><a href="#">Public User</a></li> -->
                     </ul>
               </li>
             </ul>
@@ -81,12 +81,12 @@
       </header>
 
     <div class="container form-container">
-        <h2 class="form-header">Auditor Registration</h2>
+        <h2 class="form-header">Public User Registration</h2>
         <form action="/auditor_signup" method="POST" onsubmit="return validateForm()">
           <!-- Auditor Details Section -->
-          <h5>Auditor Details</h5>
+          <h5>User Details</h5>
           <div class="form-group">
-              <label for="auditor_name">Auditor Name</label>
+              <label for="auditor_name">User Name</label>
               <input type="text" class="form-control" id="auditor_name" name="auditor_name" required>
           </div>
           <div class="form-group">

@@ -54,7 +54,7 @@
           <a href="index.html" class="logo d-flex align-items-center me-auto me-lg-0">
             <!-- Uncomment the line below if you also wish to use an image logo -->
             <!-- <img src="static/img/logo.png" alt=""> -->
-            <h1 class="sitename">GM</h1>
+            <h1 class="sitename">Carbon Footprint</h1>
             <span>.</span>
           </a>
     
@@ -67,15 +67,15 @@
                     <ul>
                       <li><a href="admin_login">Admin</a></li>
                       <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                      <li><a href="auditor_signup">Auditor</a></li>
-                      <li><a href="#">Publice User</a></li>
+                      <!-- <li><a href="auditor_signup">Auditor</a></li>
+                      <li><a href="#">Publice User</a></li> -->
                     </ul>
               </li>
             </ul>
             <i class="mobile-nav-toggle d-xl-none bi bi-list"></i>
           </nav>
     
-          <a class="btn-getstarted" href="login">Login</a>
+          <a class="btn-getstarted" href="{{ url_for('home') }}">LogOut</a>
     
         </div>
     </header>
@@ -94,6 +94,12 @@
                 <label for="emission_factor">Emission Factor:</label>
                 <input type="number" step="0.01" id="emission_factor" name="emission_factor" class="form-control" value="{{ process.emission_factor }}" required>
             </div>
+            <div class="form-group">
+              <label for="process_date">Process Date:</label>
+              <input type="date" id="process_date" name="process_date" class="form-control" 
+                     value="{{ process.process_date }}" required>
+          </div>
+          
             <button type="submit" class="btn btn-success">Update</button>
             <a href="{{ url_for('view_processes') }}" class="btn btn-secondary">Cancel</a>
         </form>

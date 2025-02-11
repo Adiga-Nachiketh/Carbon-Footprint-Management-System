@@ -67,8 +67,8 @@
                     <ul>
                       <li><a href="{{ url_for('admin_login') }}">Admin</a></li>
                       <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                      <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
-                      <li><a href="#">Public User</a></li>
+                      <!-- <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
+                      <li><a href="#">Public User</a></li> -->
                     </ul>
               </li>
             </ul>
@@ -79,62 +79,67 @@
     
         </div>
       </header>
-    <div class="container form-container">
-        <h2 class="form-header">Process</h2>
-        <form action="/add_process" id="processForm" class="border p-4 rounded shadow-sm bg-light">
-          <div class="form-group">
-              <label for="process_name">Process Name:</label>
-              <input type="text" class="form-control" id="process_name" name="process_name" required>
-          </div>
-      
-          <div class="form-group">
-              <label for="energy_consumption">Energy Consumption (kWh):</label>
-              <input type="number" class="form-control" id="energy_consumption" name="energy_consumption" step="0.01" required>
-          </div>
-      
-          <div class="form-group">
-              <label for="emission_factor">Emission Factor:</label>
-              <input type="number" class="form-control" id="emission_factor" name="emission_factor" step="0.01" required>
-          </div>
-      
-          <div class="form-group">
-              <label for="industry_id">Industry ID:</label>
-              <input type="number" class="form-control" id="industry_id" name="industry_id" required>
-          </div>
-      
-          <button type="submit" class="btn btn-primary btn-block">Add Process</button>
-      </form>
-      
-      <!-- JavaScript to handle form submission and show popup -->
-      <script>
-      document.getElementById('processForm').addEventListener('submit', function(event) {
-          event.preventDefault(); // Prevent the default form submission
-          
-          // Gather form data
-          const formData = new FormData(this);
-          
-          // Send form data using Fetch API
-          fetch('/add_process', {
-              method: 'POST',
-              body: formData
-          })
-          .then(response => response.json())
-          .then(data => {
-              if (data.message) {
-                  // Show success popup
-                  alert(data.message);
-                  // Optionally, reset the form
-                  document.getElementById('processForm').reset();
-              } else if (data.error) {
-                  // Show error message if something goes wrong
-                  alert('Error: ' + data.error);
-              }
-          })
-          .catch(error => {
-              alert('Request failed: ' + error.message);
-          });
-      });
-      </script>
+      <div class="container form-container">
+        <h2 class="form-header">Add/Edit Process</h2>
+        <form id="processForm" class="border p-4 rounded shadow-sm bg-light">
+            <div class="form-group">
+                <label for="process_name">Process Name:</label>
+                <input type="text" class="form-control" id="process_name" name="process_name" required>
+            </div>
+
+            <div class="form-group">
+                <label for="energy_consumption">Energy Consumption (kWh):</label>
+                <input type="number" class="form-control" id="energy_consumption" name="energy_consumption" step="0.01" required>
+            </div>
+
+            <div class="form-group">
+                <label for="emission_factor">Emission Factor:</label>
+                <input type="number" class="form-control" id="emission_factor" name="emission_factor" step="0.01" required>
+            </div>
+
+            <div class="form-group">
+                <label for="industry_id">Industry ID:</label>
+                <input type="number" class="form-control" id="industry_id" name="industry_id" required>
+            </div>
+
+            <div class="form-group">
+                <label for="process_date">Process Date:</label>
+                <input type="date" id="process_date" name="process_date" class="form-control" value="{{ process.process_date if process else '' }}" required>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">Save Process</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('processForm').addEventListener('submit', async function (event) {
+            event.preventDefault(); // Prevent default form submission
+
+            const formData = new FormData(this);
+
+            try {
+                const response = await fetch('/add_process', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.message) {
+                    alert(data.message);
+                    this.reset(); // Reset the form
+                } else if (data.error) {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('Request failed: ' + error.message);
+            }
+        });
+    </script>
     </div>
 
     <!-- Bootstrap JS and dependencies -->

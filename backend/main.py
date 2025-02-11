@@ -5,16 +5,43 @@ from werkzeug.security import generate_password_hash
 from functools import wraps
 from flask import jsonify
 import datetime
+import pytesseract
+from PIL import Image
+import os
+from flask import send_file
+import pandas as pd 
+from flask import request
+import requests
+from fpdf import FPDF
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
+
+import tempfile
+from tempfile import NamedTemporaryFile
+from io import BytesIO
+import io
+
+
+
+    
+    
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Ensure the upload folder exists
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
 
 # MySQL Configuration
 app.config['MYSQL_HOST'] = 'localhost'
 app.config['MYSQL_DATABASE'] = 'icfms'  # Your database name
 app.config['MYSQL_USER'] = 'root'  # Your MySQL username
-app.config['MYSQL_PASSWORD'] = 'Ubuntu@123'  # Your MySQL password
+app.config['MYSQL_PASSWORD'] = 'nunez'  # Your MySQL password
 
 
 # Create a connection
@@ -44,32 +71,43 @@ def role_required(*roles):
 def load_user_data():
     """Load the user's role and ID into the global g object."""
     if 'username' in session:
-        g.username = session['username']  # Use session['username']
+        g.username = session['username']
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Fetch the user's role_id directly from the USER table using username
-        cursor.execute("SELECT role_id FROM USER WHERE username = %s", (g.username,))
-        user = cursor.fetchone()
-        cursor.close()
-        connection.close()
+        try:
+            # Execute the query to fetch the user's role_id
+            cursor.execute("SELECT role_id FROM USER WHERE username = %s", (g.username,))
+            
+            # Fetch exactly one row
+            user = cursor.fetchone()
 
-        if user:
-            g.role_id = user['role_id']
-            
-            # Role mapping
-            role_mapping = {
-                1: 'Admin',
-                2: 'Industry Manager',
-                3: 'Auditor'
-            }
-            
-            g.role = role_mapping.get(g.role_id, 'Unknown')
-        else:
+            # Ensure any unread results are cleared to avoid errors
+            cursor.fetchall()  # Safely clears any remaining results (if any)
+
+            if user:
+                g.role_id = user['role_id']
+
+                # Map the role ID to a role name
+                role_mapping = {
+                    1: 'Admin',
+                    2: 'Industry Manager',
+                    3: 'Auditor'
+                }
+                g.role = role_mapping.get(g.role_id, 'Unknown')
+            else:
+                g.role = None
+        except mysql.connector.Error as err:
+            app.logger.error(f"Error loading user data: {err}")
             g.role = None
+        finally:
+            # Ensure the cursor and connection are closed properly
+            cursor.close()
+            connection.close()
     else:
         g.role = None
         g.username = None
+
         
 # @app.before_request
 # def load_user_role():
@@ -98,7 +136,20 @@ def home():
 # index page 
 @app.route('/index')
 def index():
-    return render_template('index.html') 
+    # Retrieve role_id from the session
+    role_id = session.get('role_id')
+    
+    # Redirect based on the role_id
+    if role_id == '1':  # Assuming '1' is the role_id for admin
+        return render_template('index2.html')  # Admin page
+    else:
+        warned = request.args.get('warned', 'false').lower() == 'true'  # Explicitly compare to 'true'
+        return render_template('index.html', warned=warned)  # Regular user page
+
+@app.route('/index2')
+def index2():
+    return render_template('index2.html')  
+
 @app.route('/signup')
 def signup():
     return render_template('signup.html')  # Ensure you have a signup.html in your templates
@@ -121,7 +172,7 @@ def carbon():
 
 @app.route('/process')
 def process():
-    return render_template('process.html')
+    return render_template('process.html', process=None)
 
 @app.route('/trans.html')
 def trans():
@@ -178,80 +229,84 @@ def add_industry():
 # Route to add a new process
 @app.route('/add_process', methods=['POST'])
 def add_process():
-    # Retrieve form data
     process_name = request.form.get('process_name')
     energy_consumption = request.form.get('energy_consumption')
     emission_factor = request.form.get('emission_factor')
     industry_id = request.form.get('industry_id')
+    process_date = request.form.get('process_date')
 
-    # Insert into the Process table
-    query = """
-        INSERT INTO Process (process_name, energy_consumption, emission_factor, industry_id)
-        VALUES (%s, %s, %s, %s)
-    """
-    values = (process_name, energy_consumption, emission_factor, industry_id)
+    # Default to today's date if process_date is not provided
+    if not process_date:
+        process_date = datetime.date.today()
 
     connection = get_db_connection()
     cursor = connection.cursor()
     try:
+        query = """
+            INSERT INTO Process (process_name, energy_consumption, emission_factor, industry_id, process_date)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        values = (process_name, energy_consumption, emission_factor, industry_id, process_date)
         cursor.execute(query, values)
         connection.commit()
-        # Return a success message
-        return jsonify(message="Process added successfully!"), 200
+
+        return jsonify(message="Process added successfully!")
     except mysql.connector.Error as err:
-        connection.rollback()
-        return jsonify(error=str(err)), 500
+        return jsonify(error=f"Database Error: {err}")
     finally:
         cursor.close()
         connection.close()
 
 
 
-# inserting transportation details 
+
 @app.route('/add_transportation', methods=['POST'])
-@role_required('Admin', 'Industry Manager')  # Ensure the user has permission
 def add_transportation():
-    # Get form data
-    vehicle_type = request.form['vehicle_type']
-    distance_travelled = request.form['distance_travelled']
-    fuel_consumption = request.form['fuel_consumption']
+    role_id = session.get('role_id')
+    username = session.get('username')
+    yo = username
+    if (role_id=='2' or role_id=='3' or role_id=='4'):
+        vehicle_type = request.form['vehicle_type']
+        distance_travelled = request.form['distance_travelled']
+        fuel_consumption = request.form['fuel_consumption']
+        date = request.form['date']
 
-    try:
-        # Get the logged-in user's industry_id
-        connection = get_db_connection()
-        cursor = connection.cursor(dictionary=True)
+        try:
+            connection = get_db_connection()
+            cursor = connection.cursor(dictionary=True)
+
+            # Fetch the user's industry_id
+            cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
+            user_data = cursor.fetchone()
+            # Clear any remaining results
+
+            if not user_data or not user_data['industry_id']:
+                flash("You are not assigned to any industry.", "warning")
+                return jsonify({"message": "You are not assigned to any industry."}), 400
+
+            industry_id = user_data['industry_id']
+
+            # Insert the transportation record
+            query = """
+            INSERT INTO Transportation (vehicle_type, distance_travelled, fuel_consumption, date, industry_id, username)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(query, (vehicle_type, distance_travelled, fuel_consumption, date, industry_id, yo))
+            connection.commit()
+
+            flash("Transportation data has been successfully added.", "success")
+            return jsonify({"message": "Transportation data added successfully."}), 200
+
+        except mysql.connector.Error as err:
+            flash(f"Database Error: {err}", "danger")
+            connection.rollback()
+            return jsonify({"message": f"Error adding transportation data: {err}"}), 500
+
+        finally:
+            cursor.close()
+            connection.close()
+
         
-        cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
-        user_data = cursor.fetchone()
-
-        if not user_data or not user_data['industry_id']:
-            flash("You are not assigned to any industry.", "warning")
-            return jsonify({"message": "You are not assigned to any industry."}), 400
-
-        industry_id = user_data['industry_id']  # Get the industry_id for the logged-in user
-
-        # Insert data into the Transportation table
-        query = """
-        INSERT INTO Transportation (vehicle_type, distance_travelled, fuel_consumption, industry_id)
-        VALUES (%s, %s, %s, %s)
-        """
-        cursor.execute(query, (vehicle_type, distance_travelled, fuel_consumption, industry_id))
-        connection.commit()
-        flash("Transportation data has been successfully added.", "success")
-
-        # Return a success message
-        return render_template('index.html')
-
-    except mysql.connector.Error as err:
-        flash(f"Error: {err}", "danger")
-        connection.rollback()
-        return jsonify({"message": f"Error adding transportation data: {err}"}), 500
-
-    finally:
-        cursor.close()
-        connection.close()
-        
-
 
 
 
@@ -293,10 +348,10 @@ def add_carbon_offset():
     # Insert data into the `Carbon_Offsets` table
     try:
         query = """
-        INSERT INTO Carbon_Offsets (offset_type, amount_offset, provider_details, date_purchased, industry_id)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO Carbon_Offsets (username, offset_type, amount_offset, provider_details, date_purchased, industry_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(query, (offset_type, offset_quantity, provider_details, date_purchased, industry_id))
+        cursor.execute(query, (username, offset_type, offset_quantity, provider_details, date_purchased, industry_id))
         connection.commit()
         flash("Carbon offset data has been successfully added.", "success")
     except mysql.connector.Error as err:
@@ -311,55 +366,35 @@ def add_carbon_offset():
 
 
 # Route to handle emission source form submission
-@app.route('/add_emission_source', methods=['GET', 'POST'])
+@app.route('/add_emission_source', methods=['POST'])
 def add_emission_source():
-    username = session.get('username')  # Fetch username from session
+    source_type = request.form.get('source_type')
+    emission_value = request.form.get('emission_value')
+    emission_date = request.form.get('emission_date')  # New field
 
-    if not username:
-        flash("User is not logged in!", "danger")
-        return redirect(url_for('login'))
-
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
 
     try:
-        if request.method == 'POST':
-            # Retrieve form data
-            source_type = request.form['source_type']
-            emission_value = request.form['emission_value']
-
-            # Fetch the user's industry_id from the User table
-            cursor.execute("SELECT industry_id FROM User WHERE username = %s", (username,))
-            user = cursor.fetchone()
-
-            if not user or not user['industry_id']:
-                flash("Industry ID not found for the logged-in user!", "danger")
-                return redirect(url_for('index'))
-
-            industry_id = user['industry_id']  # Extract industry_id
-
-            # Insert the emission source with the provided data
-            insert_query = """
-            INSERT INTO Emission_Sources (source_type, emission_value, industry_id)
+        # Insert the emission source into the table
+        query = """
+            INSERT INTO Emission_Sources (source_type, emission_value, emission_date)
             VALUES (%s, %s, %s)
-            """
-            cursor.execute(insert_query, (source_type, emission_value, industry_id))
-            conn.commit()
+        """
+        cursor.execute(query, (source_type, emission_value, emission_date))
+        connection.commit()
 
-            flash("Emission source added successfully!", "success")
-            return redirect(url_for('index'))
-
-        # If the request method is GET, just render the form
-        return render_template('add_emission_source.html')
-
+        flash("Emission source added successfully!", "success")
+        return redirect(url_for('index'))
     except mysql.connector.Error as err:
-        flash(f"Database error: {err}", "danger")
-        conn.rollback()
+        flash(f"Error: {err}", "danger")
+        connection.rollback()
     finally:
         cursor.close()
-        conn.close()
+        connection.close()
 
-    return redirect(url_for('index'))
+
+    
 
 
 # Route to render the industry manager registration form
@@ -427,7 +462,6 @@ def register():
 
 
 
-# login-in 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -443,25 +477,42 @@ def login():
         cursor = connection.cursor()
 
         # Query to check the user in the database
-        cursor.execute("SELECT * FROM USER WHERE username = %s AND role_id = %s", (username, role_id))
+        cursor.execute("SELECT * FROM user WHERE username = %s AND role_id = %s", (username, role_id))
         user = cursor.fetchone()
 
         # Debugging: check the result
         print(f"User from database: {user}")
 
-        # Validate the password (if found)
-        if user and user[3] == password:  # Assuming user[3] is the password field
-            session['username'] = username  # Store username in session
-            session['role_id'] = role_id    # Store role_id in session
-            session.permanent = True 
-            print(f"Session user_id set: {session.get('user_id')}")  # Debugging line
-            flash('Login successful!', 'success')
-            return redirect(url_for('index'))
+        # Check if the user exists
+        if user:
+            # Check if the user's password matches
+            if user[3] == password:  # Assuming user[3] is the password field
+
+                # Check if the user is warned
+                if user[6] == 1:  # Assuming user[4] is the 'warned' column (1 = warned)
+                    is_warned=True
+                else:
+                    is_warned=False
+
+                session['username'] = username  # Store username in session
+                session['role_id'] = role_id    # Store role_id in session
+                session.permanent = True 
+
+                print(f"Session user_id set: {session.get('user_id')}")  # Debugging line
+                flash('Login successful!', 'success')
+                return redirect(url_for('index', warned=is_warned))
+
+            else:
+                flash('Invalid username or password', 'danger')
+                return redirect(url_for('login'))
+
         else:
             flash('Invalid username or password', 'danger')
             return redirect(url_for('login'))
 
     return render_template('login.html')
+
+
 
 
 # @app.route('/login', methods=['GET', 'POST'])
@@ -604,10 +655,60 @@ def auditor_signup():
 # to view industry 
 
 # rectriced view only 
+@app.route('/view_emission_sources', methods=['GET'])
+def view_emission_sources():
+    # Logic to fetch and display emission sources
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    emission_sources = []
+
+    try:
+        # Query to fetch emission sources
+        query = """
+            SELECT e.source_id, e.source_type, e.emission_value, e.emission_date, i.industry_name
+            FROM Emission_Sources e
+            LEFT JOIN Industries i ON e.industry_id = i.industry_id
+        """
+        cursor.execute(query)
+        emission_sources = cursor.fetchall()  # Fetch all rows
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", "danger")
+    finally:
+        cursor.close()
+        connection.close()
+
+    return render_template('view_emission_sources.html', emission_sources=emission_sources)
+
+
+@app.route('/view_emission_sources_admin', methods=['GET'])
+def view_emission_sources_admin():
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    emission_sources = []
+
+    try:
+        # Query to fetch all emission sources
+        query = """
+            SELECT e.source_id, e.source_type, e.emission_value, e.emission_date, i.industry_name, e.process_id
+            FROM Emission_Sources e
+            LEFT JOIN Industries i ON e.industry_id = i.industry_id
+        """
+        cursor.execute(query)
+        emission_sources = cursor.fetchall()  # Fetch all rows
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", "danger")
+    finally:
+        cursor.close()  # Ensure the cursor is always closed
+        connection.close()  # Ensure the connection is always closed
+
+    return render_template('view_emission_sources_2.html', emission_sources=emission_sources)
+
+
+
+
 @app.route('/view_industries', methods=['GET'])
-@role_required('Admin', 'Industry Manager', 'Auditor')
 def view_industries():
-    print(f"User Role: {g.role}")  # Add this line for debugging
+    print(f"User Role: {g.role}")  # Debugging
 
     try:
         connection = get_db_connection()
@@ -618,7 +719,9 @@ def view_industries():
             # Fetch the logged-in user's industry_id from the USER table using username
             cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
             user_data = cursor.fetchone()
-            print(f"Fetched User Data: {user_data}")
+
+            # Ensure unread results are cleared
+            cursor.fetchall()
 
             if user_data and user_data['industry_id']:
                 # Fetch details for the user's assigned industry
@@ -629,14 +732,10 @@ def view_industries():
                 industries = []
                 return render_template('view_industries.html', industries=industries)
 
-        elif g.role == 'Admin':
-            # Admin can view all industries
+        elif g.role in ['Admin', 'Auditor']:
+            # Admin and Auditor can view all industries
             cursor.execute("SELECT * FROM Industries")
-        
-        elif g.role == 'Auditor':
-            # Admin can view all industries
-            cursor.execute("SELECT * FROM Industries")
-            
+
         industries = cursor.fetchall()
 
     except mysql.connector.Error as err:
@@ -644,16 +743,49 @@ def view_industries():
         industries = []
 
     finally:
-        cursor.close()
-        connection.close()
+        cursor.close()  # Ensure the cursor is always closed
+        connection.close()  # Ensure the connection is always closed
+
+    return render_template('view_industries.html', industries=industries)
+
+
+@app.route('/view_industries_admin', methods=['GET', 'POST'])
+def view_industries_admin():
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        # Handle form submission for adding new industries
+        if request.method == 'POST':
+            industry_name = request.form['industry_name']
+            industry_location = request.form['industry_location']
+
+            cursor.execute("""
+                INSERT INTO Industries (industry_name, industry_location)
+                VALUES (%s, %s)
+            """, (industry_name, industry_location))
+            connection.commit()
+            flash("Industry added successfully!", "success")
+
+        # Fetch all industries
+        cursor.execute("SELECT * FROM Industries")
+        industries = cursor.fetchall()
+
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", "danger")
+        industries = []
+
+    finally:
+        cursor.close()  # Ensure the cursor is always closed
+        connection.close()  # Ensure the connection is always closed
 
     return render_template('view_industries.html', industries=industries)
 
 
 
+
 # to delete
 @app.route('/delete_industry/<int:industry_id>', methods=['POST'])
-@role_required('Admin', 'Industry Manager')
 def delete_industry(industry_id):
     try:
         connection = get_db_connection()
@@ -752,67 +884,76 @@ def update_industry(industry_id):
 
 # process view
 @app.route('/view_processes', methods=['GET'])
-@role_required('Admin', 'Industry Manager', 'Auditor')
 def view_processes():
-    print(f"User Role: {g.role}")  # Debugging: Print the user's role
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
 
     try:
-        connection = get_db_connection()
-        cursor = connection.cursor(dictionary=True)
-
-        # Role-based filtering
-        if g.role == 'Industry Manager':
-            # Fetch the logged-in user's industry_id from the USER table using username
-            cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
-            user_data = cursor.fetchone()
-            print(f"Fetched User Data: {user_data}")
-
-            if user_data and user_data['industry_id']:
-                # Fetch details for the user's assigned industry
-                assigned_industry_id = user_data['industry_id']
-                query = """
-                    SELECT p.process_id, p.process_name, p.energy_consumption, p.emission_factor, i.industry_name
-                    FROM Process p
-                    JOIN Industries i ON p.industry_id = i.industry_id
-                    WHERE p.industry_id = %s
-                """
-                cursor.execute(query, (assigned_industry_id,))
-            else:
-                flash("You are not assigned to any industry.", "warning")
-                processes = []
-                return render_template('view_processes.html', processes=processes)
-
-        elif g.role == 'Admin':
-            # Admin can view all processes
-            query = """
-                SELECT p.process_id, p.process_name, p.energy_consumption, p.emission_factor, i.industry_name
-                FROM Process p
-                LEFT JOIN Industries i ON p.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-        
-        elif g.role == 'Auditor':
-            # Admin can view all processes
-            query = """
-                SELECT p.process_id, p.process_name, p.energy_consumption, p.emission_factor, i.industry_name
-                FROM Process p
-                LEFT JOIN Industries i ON p.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-
+        query = """
+            SELECT p.process_id, p.process_name, p.energy_consumption, p.emission_factor, 
+                   p.process_date, i.industry_name
+            FROM Process p
+            LEFT JOIN Industries i ON p.industry_id = i.industry_id
+        """
+        cursor.execute(query)
         processes = cursor.fetchall()
-
-        print(f"Fetched Processes: {processes}")  # Debugging: Print the fetched processes
-
     except mysql.connector.Error as err:
         flash(f"Database Error: {err}", "danger")
         processes = []
-
     finally:
         cursor.close()
         connection.close()
 
     return render_template('view_processes.html', processes=processes)
+
+
+# View processes - Entire table accessible to all roles
+@app.route('/view_processes_admin', methods=['GET', 'POST'])
+def view_processes_admin():
+    connection = get_db_connection()
+
+    if not connection:
+        flash("Database connection failed!", 'danger')
+        return redirect(url_for('home'))
+
+    processes = []
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        # Handle form submission for adding new processes
+        if request.method == 'POST':
+            process_name = request.form['process_name']
+            energy_consumption = request.form['energy_consumption']
+            emission_factor = request.form['emission_factor']
+            process_date = request.form['process_date']
+            industry_id = request.form['industry_id']  # Allow specifying the industry ID
+
+            cursor.execute("""
+                INSERT INTO Process (process_name, energy_consumption, emission_factor, process_date, industry_id)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (process_name, energy_consumption, emission_factor, process_date, industry_id))
+            connection.commit()
+            flash("Process added successfully!", 'success')
+
+        # Fetch the entire Process table
+        query = """
+            SELECT p.process_id, p.process_name, p.energy_consumption, p.emission_factor, 
+                   p.process_date, i.industry_name
+            FROM Process p
+            LEFT JOIN Industries i ON p.industry_id = i.industry_id
+        """
+        cursor.execute(query)
+        processes = cursor.fetchall()
+
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", 'danger')
+    finally:
+        cursor.close()
+        connection.close()
+
+    return render_template('view_process_2.html', processes=processes)
+
+
 
 # delete process
 @app.route('/delete_process/<int:process_id>', methods=['POST'])
@@ -860,120 +1001,132 @@ def delete_process(process_id):
 
 # update
 @app.route('/update_process/<int:process_id>', methods=['GET', 'POST'])
-@role_required('Admin', 'Industry Manager')
 def update_process(process_id):
-    # Database connection
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
     if request.method == 'GET':
-        # Fetch the current details of the process
         cursor.execute("SELECT * FROM Process WHERE process_id = %s", (process_id,))
         process = cursor.fetchone()
-
-        if process is None:
-            flash("Process not found!", 'danger')
+        if not process:
+            flash("Process not found!", "danger")
             return redirect(url_for('view_processes'))
-
-        # Render the template with the current process details in the form
         return render_template('update_process.html', process=process)
 
     elif request.method == 'POST':
-        # Safely get form data with .get() to avoid KeyError
         process_name = request.form.get('process_name')
         energy_consumption = request.form.get('energy_consumption')
         emission_factor = request.form.get('emission_factor')
-
-        # Validate the inputs
-        if not process_name or not energy_consumption or not emission_factor:
-            flash("All fields are required.", 'danger')
-            return redirect(url_for('update_process', process_id=process_id))
+        process_date = request.form.get('process_date')  # New date field
 
         try:
-            # Update the process in the database
             cursor.execute("""
                 UPDATE Process
-                SET process_name = %s, energy_consumption = %s, emission_factor = %s
+                SET process_name = %s, energy_consumption = %s, emission_factor = %s, process_date = %s
                 WHERE process_id = %s
-            """, (profcess_name, energy_consumption, emission_factor, process_id))
-
+            """, (process_name, energy_consumption, emission_factor, process_date, process_id))
             connection.commit()
-
-            flash("Process updated successfully!", 'success')
-            return redirect(url_for('view_processes'))
-
+            flash("Process updated successfully!", "success")
         except mysql.connector.Error as err:
-            flash(f"Database error: {err}", 'danger')
-            return redirect(url_for('update_process', process_id=process_id))
-
+            flash(f"Database Error: {err}", "danger")
         finally:
             cursor.close()
             connection.close()
+
+        return redirect(url_for('view_processes'))
+
     
     
 # View carbon offsets
-@app.route('/view_carbon_offsets', methods=['GET'])
-@role_required('Admin', 'Industry Manager', 'Auditor')
+@app.route('/view_carbon_offsets', methods=['GET', 'POST'])
 def view_carbon_offsets():
-    print(f"User Role: {g.role}")  # Debugging: Print the user's role
+    username = session.get('username')  # Get the username from the session
+    connection = get_db_connection()
 
+    if not connection:
+        flash("Database connection failed!", 'danger')
+        return redirect(url_for('home'))
+
+    carbon_offsets = []
     try:
-        connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Role-based filtering
-        if g.role == 'Industry Manager':
-            # Fetch the logged-in user's industry_id from the USER table using username
-            cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
-            user_data = cursor.fetchone()
-            print(f"Fetched User Data: {user_data}")
+        # Handle form submission for adding carbon offsets
+        if request.method == 'POST':
+            offset_type = request.form['offset_type']
+            amount_offset = request.form['amount_offset']
+            provider_details = request.form['provider_details']
+            date_purchased = request.form['date_purchased']
 
-            if user_data and user_data['industry_id']:
-                # Fetch details for the user's assigned industry
-                assigned_industry_id = user_data['industry_id']
-                query = """
-                    SELECT co.offset_id, co.offset_type, co.amount_offset, co.date_purchased, co.provider_details, i.industry_name
-                    FROM Carbon_Offsets co
-                    JOIN Industries i ON co.industry_id = i.industry_id
-                    WHERE co.industry_id = %s
-                """
-                cursor.execute(query, (assigned_industry_id,))
-            else:
-                flash("You are not assigned to any industry.", "warning")
-                carbon_offsets = []
-                return render_template('view_carbon_offsets.html', carbon_offsets=carbon_offsets)
+            # Insert new carbon offset into the table
+            cursor.execute("""
+                INSERT INTO Carbon_Offsets (offset_type, amount_offset, provider_details, date_purchased)
+                VALUES (%s, %s, %s, %s)
+            """, (offset_type, amount_offset, provider_details, date_purchased))
+            connection.commit()
+            flash("Carbon offset added successfully!", 'success')
 
-        elif g.role == 'Admin':
-            # Admin can view all carbon offsets
-            query = """
-                SELECT co.offset_id, co.offset_type, co.amount_offset, co.date_purchased, co.provider_details, i.industry_name
-                FROM Carbon_Offsets co
-                LEFT JOIN Industries i ON co.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-            
-        elif g.role == 'Auditor':
-            # Admin can view all carbon offsets
-            query = """
-                SELECT co.offset_id, co.offset_type, co.amount_offset, co.date_purchased, co.provider_details, i.industry_name
-                FROM Carbon_Offsets co
-                LEFT JOIN Industries i ON co.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-
+        # Fetch the entire Carbon_Offsets table
+        cursor.execute("SELECT * FROM Carbon_Offsets")
         carbon_offsets = cursor.fetchall()
-
-        print(f"Fetched Carbon Offsets: {carbon_offsets}")  # Debugging: Print the fetched offsets
+        print(f"Fetched Carbon Offsets: {carbon_offsets}")  # Debugging
 
     except mysql.connector.Error as err:
-        flash(f"Database Error: {err}", "danger")
+        flash(f"Database Error: {err}", 'danger')
         carbon_offsets = []
 
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+    # Render the template with the fetched carbon offsets data
+    return render_template('view_carbon_offsets.html', carbon_offsets=carbon_offsets)
+
+
+
+# View carbon offsets - Entire table accessible to all roles
+@app.route('/view_carbon_offsets_admin', methods=['GET', 'POST'])
+def view_carbon_offsets_admin():
+    connection = get_db_connection()
+
+    if not connection:
+        flash("Database connection failed!", 'danger')
+        return redirect(url_for('home'))
+
+    carbon_offsets = []
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        # Handle form submission for adding carbon offsets
+        if request.method == 'POST':
+            offset_type = request.form['offset_type']
+            amount_offset = request.form['amount_offset']
+            provider_details = request.form['provider_details']
+            date_purchased = request.form['date_purchased']
+            industry_id = request.form['industry_id']  # Allow specifying the industry ID
+
+            cursor.execute("""
+                INSERT INTO Carbon_Offsets (offset_type, amount_offset, provider_details, date_purchased, industry_id)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (offset_type, amount_offset, provider_details, date_purchased, industry_id))
+            connection.commit()
+            flash("Carbon offset added successfully!", 'success')
+
+        # Fetch the entire Carbon_Offsets table
+        cursor.execute("SELECT * FROM Carbon_Offsets")
+        carbon_offsets = cursor.fetchall()
+
+    except mysql.connector.Error as err:
+        flash(f"Database error: {err}", 'danger')
     finally:
         cursor.close()
         connection.close()
 
-    return render_template('view_carbon_offsets.html', carbon_offsets=carbon_offsets)
+    # Render the view with the entire table and form
+    return render_template('view_carbon_offsets_2.html', carbon_offsets=carbon_offsets)
+
 
 
 # Delete carbon offset
@@ -1077,229 +1230,250 @@ def update_carbon_offset(offset_id):
 
 # View transportation
 @app.route('/view_transportation', methods=['GET'])
-@role_required('Admin', 'Industry Manager', 'Auditor')
 def view_transportation():
+    try:
+        # Debugging: Print the logged-in user's username
+        username = session.get('username')  # Get the username from the session
+        print(f"Username: {username}")
+        
+        # Establish database connection
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        # Query to fetch transportation details for the logged-in user
+        query = """
+            SELECT t.transport_id, t.vehicle_type, t.distance_travelled, 
+                   t.fuel_consumption, t.date, t.username, i.industry_name
+            FROM Transportation t
+            JOIN Industries i ON t.industry_id = i.industry_id
+            WHERE t.username = %s
+        """
+        cursor.execute(query, (username,))
+
+        # Fetch all rows matching the query
+        transportation = cursor.fetchall()
+        print(f"Fetched Transportation: {transportation}")  # Debugging
+
+    except mysql.connector.Error as err:
+        # Handle database errors
+        flash(f"Database Error: {err}", "danger")
+        transportation = []
+
+    finally:
+        # Ensure cursor and connection are closed
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
+    # Render the template with the fetched transportation data
+    return render_template('view_transportation.html', transportation=transportation)
+
+
+
+
+# View transportation - Entire table accessible to all roles
+@app.route('/v_transportation_admin', methods=['GET'])
+
+def v_transportation_admin():
     print(f"User Role: {g.role}")  # Debugging: Print the user's role
 
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Role-based filtering
-        if g.role == 'Industry Manager':
-            # Fetch the logged-in user's industry_id from the USER table using username
-            cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
-            user_data = cursor.fetchone()
-            print(f"Fetched User Data: {user_data}")
-
-            if user_data and user_data['industry_id']:
-                # Fetch details for the user's assigned industry
-                assigned_industry_id = user_data['industry_id']
-                query = """
-                    SELECT t.transport_id, t.vehicle_type, t.distance_travelled, t.fuel_consumption, i.industry_name
-                    FROM Transportation t
-                    JOIN Industries i ON t.industry_id = i.industry_id
-                    WHERE t.industry_id = %s
-                """
-                cursor.execute(query, (assigned_industry_id,))
-            else:
-                flash("You are not assigned to any industry.", "warning")
-                transportation = []
-                return render_template('view_transportation.html', transportation=transportation)
-
-        elif g.role == 'Admin':
-            # Admin can view all transportation entries
-            query = """
-                SELECT t.transport_id, t.vehicle_type, t.distance_travelled, t.fuel_consumption, i.industry_name
-                FROM Transportation t
-                LEFT JOIN Industries i ON t.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-            
-        elif g.role == 'Auditor':
-            # Admin can view all transportation entries
-            query = """
-                SELECT t.transport_id, t.vehicle_type, t.distance_travelled, t.fuel_consumption, i.industry_name
-                FROM Transportation t
-                LEFT JOIN Industries i ON t.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-
-        transportation = cursor.fetchall()
-
-        print(f"Fetched Transportation: {transportation}")  # Debugging: Print the fetched transportation
+        # Query to fetch the entire Transportation table
+        query = """
+            SELECT t.transport_id, t.vehicle_type, t.distance_travelled, 
+                   t.fuel_consumption, t.date, t.username, i.industry_name
+            FROM Transportation t
+            LEFT JOIN Industries i ON t.industry_id = i.industry_id
+        """
+        cursor.execute(query)
+        transportation = cursor.fetchall()  # Fetch all rows
+        print(f"Fetched Transportation: {transportation}")  # Debugging
 
     except mysql.connector.Error as err:
         flash(f"Database Error: {err}", "danger")
         transportation = []
 
     finally:
-        cursor.close()
-        connection.close()
+        cursor.close()  # Ensure the cursor is always closed
+        connection.close()  # Ensure the connection is always closed
 
-    return render_template('view_transportation.html', transportation=transportation)
+    return render_template('view_transportation_2.html', transportation=transportation)
+
+@app.route('/view_transportation_2')
+def view_transportation_2():
+    return render_template('view_transportation_2.html')
 
 
-# Delete transportation entry
-# Delete transportation
-@app.route('/delete_transportation/<int:transport_id>', methods=['POST'])
-@role_required('Admin', 'Industry Manager')
-def delete_transportation(transport_id):
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor(dictionary=True)
-
-        # Restrict Industry Managers to only their assigned transportation records
-        if g.role == 'Industry Manager':
-            cursor.execute("""
-                SELECT * 
-                FROM Transportation 
-                WHERE transport_id = %s AND industry_id = (SELECT industry_id FROM USER WHERE username = %s)
-            """, (transport_id, g.username))
-        elif g.role == 'Admin':
-            cursor.execute("SELECT * FROM Transportation WHERE transport_id = %s", (transport_id,))
-        
-        transportation = cursor.fetchone()
-
-        if not transportation:
-            flash("You do not have permission to delete this transportation record or it doesn't exist.", "danger")
-            return redirect(url_for('view_transportation'))
-    except mysql.connector.Error as err:
-        flash(f"Database Error: {err}", "danger")
-        return redirect(url_for('view_transportation'))
-    finally:
-        cursor.close()
-        connection.close()
-
-    try:
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        cursor.execute("DELETE FROM Transportation WHERE transport_id = %s", (transport_id,))
-        connection.commit()
-        flash("Transportation record deleted successfully!", "success")
-    except mysql.connector.Error as err:
-        flash(f"Error deleting transportation record: {err}", "danger")
-    finally:
-        cursor.close()
-        connection.close()
-
-    return redirect(url_for('view_transportation'))
-
-# Update transportation entry
-
-@app.route('/update_transportation/<int:transport_id>', methods=['GET', 'POST'])
-@role_required('Admin', 'Industry Manager')
-def update_transportation(transport_id):
-    connection = get_db_connection()
-    cursor = connection.cursor(dictionary=True)
-
-    if request.method == 'GET':
-        # Fetch the current details of the transportation record
-        cursor.execute("SELECT * FROM Transportation WHERE transport_id = %s", (transport_id,))
-        transportation = cursor.fetchone()
-
-        if transportation is None:
-            flash("Transportation record not found!", 'danger')
-            return redirect(url_for('view_transportation'))
-
-        # Pass the fetched record to the template
-        return render_template('update_transportation.html', transportation=transportation)
-
-    elif request.method == 'POST':
-        # Get form data
-        vehicle_type = request.form.get('vehicle_type')
-        distance_travelled = request.form.get('distance_travelled')
-        fuel_consumption = request.form.get('fuel_consumption')
-
-        # Validate the inputs
-        if not vehicle_type or not distance_travelled or not fuel_consumption:
-            flash("All fields are required.", 'danger')
-            return redirect(url_for('update_transportation', transport_id=transport_id))
-
-        try:
-            # Update the record in the database
-            cursor.execute("""
-                UPDATE Transportation
-                SET vehicle_type = %s, distance_travelled = %s, fuel_consumption = %s
-                WHERE transport_id = %s
-            """, (vehicle_type, distance_travelled, fuel_consumption, transport_id))
-            connection.commit()
-
-            flash("Transportation record updated successfully!", 'success')
-            return redirect(url_for('view_transportation'))
-
-        except mysql.connector.Error as err:
-            flash(f"Database error: {err}", 'danger')
-            return redirect(url_for('update_transportation', transport_id=transport_id))
-
-        finally:
-            cursor.close()
-            connection.close()
-    
-    
-    
-# View emission sources
-@app.route('/view_emission_sources', methods=['GET'])
-@role_required('Admin', 'Industry Manager', 'Auditor')
-def view_emission_sources():
+@app.route('/v_transportation_sor', methods=['GET'])
+def v_transportation_sor():
     print(f"User Role: {g.role}")  # Debugging: Print the user's role
 
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Role-based filtering
-        if g.role == 'Industry Manager':
-            # Fetch the logged-in user's industry_id from the USER table using username
-            cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (g.username,))
-            user_data = cursor.fetchone()
-
-            if user_data and user_data['industry_id']:
-                # Fetch details for the user's assigned industry
-                assigned_industry_id = user_data['industry_id']
-                query = """
-                    SELECT e.source_id, e.source_type, e.emission_value, i.industry_name
-                    FROM Emission_Sources e
-                    JOIN Industries i ON e.industry_id = i.industry_id
-                    WHERE e.industry_id = %s
-                """
-                cursor.execute(query, (assigned_industry_id,))
-            else:
-                flash("You are not assigned to any industry.", "warning")
-                emission_sources = []
-                return render_template('view_emission_sources.html', emission_sources=emission_sources)
-
-        elif g.role == 'Admin':
-            # Admin can view all emission sources
-            query = """
-                SELECT e.source_id, e.source_type, e.emission_value, i.industry_name
-                FROM Emission_Sources e
-                LEFT JOIN Industries i ON e.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-            
-        elif g.role == 'Auditor':
-            # Admin can view all emission sources
-            query = """
-                SELECT e.source_id, e.source_type, e.emission_value, i.industry_name
-                FROM Emission_Sources e
-                LEFT JOIN Industries i ON e.industry_id = i.industry_id
-            """
-            cursor.execute(query)
-
-        emission_sources = cursor.fetchall()
-
-        print(f"Fetched Emission Sources: {emission_sources}")  # Debugging: Print the fetched data
+        # Query to fetch and sort the Transportation table by fuel consumption in descending order
+        query = """
+            SELECT t.transport_id, t.vehicle_type, t.distance_travelled, 
+                   t.fuel_consumption, t.date, t.username, i.industry_name
+            FROM Transportation t
+            LEFT JOIN Industries i ON t.industry_id = i.industry_id
+            ORDER BY t.fuel_consumption DESC
+        """
+        cursor.execute(query)
+        transportation = cursor.fetchall()  # Fetch all rows
+        print(f"Fetched Transportation (sorted by fuel consumption): {transportation}")  # Debugging
 
     except mysql.connector.Error as err:
         flash(f"Database Error: {err}", "danger")
-        emission_sources = []
+        transportation = []
+
+    finally:
+        cursor.close()  # Ensure the cursor is always closed
+        connection.close()  # Ensure the connection is always closed
+
+    return render_template('view_transportation_sor.html', transportation=transportation)
+
+
+
+
+
+@app.route('/warn_user/<username>', methods=['POST'])
+def warn_user(username):
+    if not username:  # Check if username is None or empty
+        flash('Invalid username. Cannot warn the user.', 'danger')
+        return redirect(url_for('index')) # Redirect to the transportation view or another appropriate page
+
+    # Proceed with warning the user if the username is valid
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    # Update the user to set their warned status
+    cursor.execute("UPDATE USER SET warned = %s WHERE username = %s", (1, username))  # Assuming 1 represents warned status
+    connection.commit()
+
+    # Redirect or return a response after warning the user
+    flash(f'User {username} has been warned!', 'warning')
+    return redirect(url_for('index'))  # Adjust the redirect as needed
+
+
+
+
+
+# Delete transportation entry
+@app.route('/update_transportation/<int:transport_id>', methods=['GET', 'POST'])
+# @role_required('Admin', 'Industry Manager')
+def update_transportation(transport_id):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        if request.method == 'GET':
+            cursor.execute("SELECT * FROM Transportation WHERE transport_id = %s", (transport_id,))
+            transportation = cursor.fetchone()
+            cursor.fetchall()  # Clear any remaining results
+
+            if transportation is None:
+                flash("Transportation record not found!", 'danger')
+                return redirect(url_for('view_transportation'))
+
+            return render_template('update_transportation.html', transportation=transportation)
+
+        elif request.method == 'POST':
+            vehicle_type = request.form['vehicle_type']
+            distance_travelled = request.form['distance_travelled']
+            fuel_consumption = request.form['fuel_consumption']
+            date = request.form['date']
+
+            query = """
+                UPDATE Transportation
+                SET vehicle_type = %s, distance_travelled = %s, fuel_consumption = %s, date = %s
+                WHERE transport_id = %s
+            """
+            cursor.execute(query, (vehicle_type, distance_travelled, fuel_consumption, date, transport_id))
+            connection.commit()
+
+            flash("Transportation record updated successfully!", 'success')
+            return redirect(url_for('view_transportation'))
+
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", 'danger')
 
     finally:
         cursor.close()
         connection.close()
 
-    return render_template('view_emission_sources.html', emission_sources=emission_sources)
+@app.route('/delete_transportation/<int:transport_id>', methods=['POST'])
+def delete_transportation(transport_id):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        # Delete the record
+        cursor.execute("DELETE FROM Transportation WHERE transport_id = %s", (transport_id,))
+        connection.commit()
+
+        flash("Transportation record deleted successfully.", "success")
+    except mysql.connector.Error as err:
+        flash(f"Database error: {err}", "danger")
+    finally:
+        cursor.close()
+        connection.close()
+
+    return redirect(url_for('index'))
+
+    
+# # View emission sources
+# @app.route('/add_emission_source', methods=['POST'])
+# @role_required('Admin', 'Industry Manager')  # Ensure only authorized roles can add
+# def add_emission_source():
+#     source_type = request.form.get('source_type')
+#     emission_value = request.form.get('emission_value')
+#     emission_date = request.form.get('emission_date')
+#     username = session.get('username')  # Assuming session contains the logged-in username
+
+#     if not username:
+#         flash("User is not logged in!", "danger")
+#         return redirect(url_for('login'))
+
+#     connection = get_db_connection()
+#     cursor = connection.cursor(dictionary=True)
+
+#     try:
+#         # Fetch the industry ID for the logged-in user
+#         cursor.execute("SELECT industry_id FROM USER WHERE username = %s", (username,))
+#         user_data = cursor.fetchone()
+
+#         if not user_data or not user_data['industry_id']:
+#             flash("You are not assigned to any industry.", "warning")
+#             return redirect(url_for('view_emission_sources'))
+
+#         industry_id = user_data['industry_id']
+
+#         # Insert the emission source into the database
+#         query = """
+#             INSERT INTO Emission_Sources (source_type, emission_value, emission_date, industry_id)
+#             VALUES (%s, %s, %s, %s)
+#         """
+#         cursor.execute(query, (source_type, emission_value, emission_date, industry_id))
+#         connection.commit()
+
+#         flash("Emission source added successfully!", "success")
+#         return redirect(url_for('view_emission_sources'))
+
+#     except mysql.connector.Error as err:
+#         flash(f"Database Error: {err}", "danger")
+#         connection.rollback()
+
+#     finally:
+#         cursor.close()
+#         connection.close()
+
+#     return redirect(url_for('view_emission_sources'))
 
 
 # Delete emission source
@@ -1432,6 +1606,453 @@ def get_carbon_offset():
     
     # If it's a GET request, render the form page (get_carbon_offset.html)
     return render_template('get_carbon_offset.html')
+from flask import send_file
+@app.route('/industry_summary', methods=['GET'])  # Remove the <int:industry_id> part from the URL
+def industry_summary_route():
+    return industry_summary()  # Call the function without any arguments
+
+
+from flask import render_template, request, jsonify
+from io import BytesIO
+from fpdf import FPDF
+import matplotlib.pyplot as plt
+from tempfile import NamedTemporaryFile
+
+
+@app.route('/industry_summary', methods=['GET'])
+def industry_summary():
+    """Generate and display industry summary with metrics, filters, and charts."""
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    # Initialize filter variables
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    month = request.args.get('month')
+
+    query_conditions = ""
+    params = []
+
+    # Add date filter if present
+    if start_date and end_date:
+        query_conditions += " AND process_date BETWEEN %s AND %s"
+        params.extend([start_date, end_date])
+
+    # Add month filter if present
+    if month:
+        query_conditions += " AND MONTH(process_date) = %s"
+        params.append(month)
+
+    try:
+        # Fetch key metrics from Process table
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(energy_consumption), 0) AS total_energy_consumption,
+                COALESCE(SUM(emission_factor), 0) AS total_emission_factor
+            FROM Process
+            {query_conditions}
+        """, params)
+        process_totals = cursor.fetchone()
+
+        # Fetch key metrics from Transportation table
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(fuel_consumption), 0) AS total_fuel_consumption,
+                COALESCE(SUM(distance_travelled), 0) AS total_distance_travelled
+            FROM Transportation
+            {query_conditions}
+        """, params)
+        transportation_totals = cursor.fetchone()
+
+        # Fetch key metrics from Emission_Sources table
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(emission_value), 0) AS total_emissions
+            FROM Emission_Sources
+            {query_conditions}
+        """, params)
+        emission_totals = cursor.fetchone()
+
+        # Fetch key metrics from Carbon_Offsets table
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(amount_offset), 0) AS total_offsets
+            FROM Carbon_Offsets
+            {query_conditions}
+        """, params)
+        offset_totals = cursor.fetchone()
+
+        # Calculate Net Emissions
+        total_emissions = emission_totals["total_emissions"] or 0
+        total_offsets = offset_totals["total_offsets"] or 0
+        net_emissions = total_emissions - total_offsets
+
+        # Prepare chart data
+        chart_data = {
+            "process_emission_factor": process_totals["total_emission_factor"] or 0,
+            "transportation_fuel_consumption": transportation_totals["total_fuel_consumption"] or 0,
+            "total_emissions": total_emissions,
+            "total_offsets": total_offsets,
+            "net_emissions": net_emissions,
+        }
+
+    finally:
+        cursor.close()
+        connection.close()
+
+    # Generate charts
+    emissions_chart = generate_bar_chart(chart_data)
+    breakdown_chart = generate_doughnut_chart(chart_data)
+    net_emissions_chart = generate_pie_chart(chart_data)
+
+    # Render HTML template
+    return render_template(
+        "industry_summary.html",
+        data={
+            "process_totals": process_totals,
+            "transportation_totals": transportation_totals,
+            "emission_totals": emission_totals,
+            "offset_totals": offset_totals,
+            "net_emissions": net_emissions,
+        },
+        emissions_chart=emissions_chart,
+        breakdown_chart=breakdown_chart,
+        net_emissions_chart=net_emissions_chart,
+    )
+
+
+
+
+@app.route('/view_all_tables', methods=['GET'])
+def view_all_tables():
+    # Establishing the connection to the database
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    # Querying the data from all three tables
+    transportation_data = []
+    carbon_offsets_data = []
+    emission_sources_data = []
+
+    try:
+        # Fetching data from the transportation table
+        cursor.execute("SELECT * FROM transportation order by distance_travelled DESC")
+        transportation_data = cursor.fetchall()
+
+        # Fetching data from the carbon_offsets table
+        cursor.execute("SELECT * FROM carbon_offsets order by amount_offset desc")
+        carbon_offsets_data = cursor.fetchall()
+
+        # Fetching data from the emission_sources table
+        cursor.execute("SELECT * FROM emission_sources order by emission_value desc")
+        emission_sources_data = cursor.fetchall()
+
+    except mysql.connector.Error as err:
+        flash(f"Database Error: {err}", "danger")
+
+    finally:
+        cursor.close()  # Ensuring the cursor is always closed
+        connection.close()  # Ensuring the connection is always closed
+
+    # Rendering the HTML page with the data from all three tables
+    return render_template('view_all_tables.html',
+                           transportation_data=transportation_data,
+                           carbon_offsets_data=carbon_offsets_data,
+                           emission_sources_data=emission_sources_data)
+
+
+
+
+@app.route('/indust_summary/<int:industry_id>', methods=['GET'])
+def indust_summary(industry_id):
+    """Generate and display industry summary with metrics, filters, and charts."""
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    # Initialize filter variables
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    month = request.args.get('month')
+
+    query_conditions = "WHERE industry_id = %s"
+    params = [industry_id]
+
+    # Add date filter if present
+    if start_date and end_date:
+        query_conditions += " AND process_date BETWEEN %s AND %s"
+        params.extend([start_date, end_date])
+
+    # Add month filter if present
+    if month:
+        query_conditions += " AND MONTH(process_date) = %s"
+        params.append(month)
+
+    try:
+        # Fetch key metrics
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(energy_consumption), 0) AS total_energy_consumption,
+                COALESCE(SUM(emission_factor), 0) AS total_emission_factor
+            FROM Process
+            {query_conditions}
+        """, params)
+        process_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(fuel_consumption), 0) AS total_fuel_consumption,
+                COALESCE(SUM(distance_travelled), 0) AS total_distance_travelled
+            FROM Transportation
+            {query_conditions}
+        """, params)
+        transportation_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(emission_value), 0) AS total_emissions
+            FROM Emission_Sources
+            {query_conditions}
+        """, params)
+        emission_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(amount_offset), 0) AS total_offsets
+            FROM Carbon_Offsets
+            {query_conditions}
+        """, params)
+        offset_totals = cursor.fetchone()
+
+        # Calculate Net Emissions
+        total_emissions = emission_totals["total_emissions"] or 0
+        total_offsets = offset_totals["total_offsets"] or 0
+        net_emissions = total_emissions - total_offsets
+
+        # Prepare chart data
+        chart_data = {
+            "process_emission_factor": process_totals["total_emission_factor"] or 0,
+            "transportation_fuel_consumption": transportation_totals["total_fuel_consumption"] or 0,
+            "total_emissions": total_emissions,
+            "total_offsets": total_offsets,
+            "net_emissions": net_emissions,
+        }
+
+    finally:
+        cursor.close()
+        connection.close()
+
+    # Generate charts
+    emissions_chart = generate_bar_chart(chart_data)
+    breakdown_chart = generate_doughnut_chart(chart_data)
+    net_emissions_chart = generate_pie_chart(chart_data)
+
+    # Render HTML template
+    return render_template(
+        "indust_summary.html",
+        industry_id=industry_id,
+        data={
+            "process_totals": process_totals,
+            "transportation_totals": transportation_totals,
+            "emission_totals": emission_totals,
+            "offset_totals": offset_totals,
+            "net_emissions": net_emissions,
+        },
+        emissions_chart=emissions_chart,
+        breakdown_chart=breakdown_chart,
+        net_emissions_chart=net_emissions_chart,
+    )
+
+
+
+def generate_bar_chart(data):
+    """Generate a bar chart for emissions and offsets."""
+    plt.figure(figsize=(8, 5))
+    labels = ["Processes", "Transportation", "Emissions", "Offsets"]
+    values = [
+        data["process_emission_factor"],
+        data["transportation_fuel_consumption"],
+        data["total_emissions"],
+        data["total_offsets"],
+    ]
+    plt.bar(labels, values, color=["#007bff", "#dc3545", "#ffc107", "#28a745"])
+    plt.title("Emission vs Offset Data")
+    plt.ylabel("Values")
+
+    with NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+        plt.savefig(temp_file.name, format="png")
+        plt.close()
+        return temp_file.name
+
+def generate_doughnut_chart(data):
+    """Generate a doughnut chart for emissions breakdown."""
+    plt.figure(figsize=(6, 6))
+
+    # Replace None or NaN values with 0
+    process_emission_factor = data.get("process_emission_factor", 0) or 0
+    transportation_fuel_consumption = data.get("transportation_fuel_consumption", 0) or 0
+    total_emissions = data.get("total_emissions", 0) or 0
+
+    # Ensure all values are valid
+    values = [
+        max(process_emission_factor, 0),
+        max(transportation_fuel_consumption, 0),
+        max(total_emissions, 0),
+    ]
+
+    # Handle the case where all values are 0
+    if sum(values) == 0:
+        values = [1]  # Add a dummy value
+        labels = ["No Data"]
+        colors = ["#cccccc"]
+    else:
+        labels = ["Processes", "Transportation", "Emissions"]
+        colors = ["#007bff", "#dc3545", "#ffc107"]
+
+    plt.pie(
+        values,
+        labels=labels,
+        autopct="%1.1f%%",
+        startangle=140,
+        colors=colors,
+    )
+    plt.title("Emission Sources Breakdown")
+
+    with NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+        plt.savefig(temp_file.name, format="png")
+        plt.close()
+        return temp_file.name
+
+def generate_pie_chart(data):
+    """Generate a pie chart for net emissions."""
+    plt.figure(figsize=(6, 6))
+
+    # Replace None or NaN values with 0
+    net_emissions = data.get("net_emissions", 0) or 0
+    total_offsets = data.get("total_offsets", 0) or 0
+
+    # Ensure all values are valid
+    net_emissions = max(net_emissions, 0)
+    total_offsets = max(total_offsets, 0)
+
+    values = [net_emissions, total_offsets]
+
+    # Handle the case where all values are 0
+    if sum(values) == 0:
+        values = [1]  # Add a dummy value
+        labels = ["No Data"]
+        colors = ["#cccccc"]
+    else:
+        labels = ["Net Emissions", "Offsets"]
+        colors = ["#dc3545", "#28a745"]
+
+    plt.pie(
+        values,
+        labels=labels,
+        autopct="%1.1f%%",
+        startangle=140,
+        colors=colors,
+    )
+    plt.title("Net Emissions Overview")
+
+    with NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+        plt.savefig(temp_file.name, format="png")
+        plt.close()
+        return temp_file.name
+    
+@app.route('/download_report', methods=['GET'])
+def download_report():
+    """Generate a downloadable PDF report with key metrics and graphs for the entire dataset."""
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        query_conditions = ""
+        params = []
+
+        # Add date filter if present
+        if start_date and end_date:
+            query_conditions = "WHERE process_date BETWEEN %s AND %s"
+            params.extend([start_date, end_date])
+
+        # Fetch key metrics for the entire table
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(energy_consumption), 0) AS total_energy_consumption,
+                COALESCE(SUM(emission_factor), 0) AS total_emission_factor
+            FROM Process
+            {query_conditions}
+        """, params)
+        process_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT 
+                COALESCE(SUM(fuel_consumption), 0) AS total_fuel_consumption,
+                COALESCE(SUM(distance_travelled), 0) AS total_distance_travelled
+            FROM Transportation
+            {query_conditions}
+        """, params)
+        transportation_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(emission_value), 0) AS total_emissions
+            FROM Emission_Sources
+            {query_conditions}
+        """, params)
+        emission_totals = cursor.fetchone()
+
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(amount_offset), 0) AS total_offsets
+            FROM Carbon_Offsets
+            {query_conditions}
+        """, params)
+        offset_totals = cursor.fetchone()
+
+        # Handle None values
+        total_emissions = emission_totals['total_emissions'] or 0
+        total_offsets = offset_totals['total_offsets'] or 0
+
+        # Create the PDF report
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+
+        # Add metrics to the PDF
+        pdf.cell(200, 10, txt="Industry Summary Report (Entire Dataset)", ln=True, align='C')
+
+        pdf.cell(200, 10, txt=f"Total Energy Consumption: {process_totals['total_energy_consumption']}", ln=True)
+        pdf.cell(200, 10, txt=f"Total Emission Factor: {process_totals['total_emission_factor']}", ln=True)
+        pdf.cell(200, 10, txt=f"Total Fuel Consumption: {transportation_totals['total_fuel_consumption']}", ln=True)
+        pdf.cell(200, 10, txt=f"Total Distance Traveled: {transportation_totals['total_distance_travelled']}", ln=True)
+        pdf.cell(200, 10, txt=f"Total Emissions: {total_emissions}", ln=True)
+        pdf.cell(200, 10, txt=f"Total Offsets: {total_offsets}", ln=True)
+        pdf.cell(200, 10, txt=f"Net Emissions: {total_emissions - total_offsets}", ln=True)
+
+        # Add charts to the PDF
+        plt.bar(["Emissions", "Offsets"], [total_emissions, total_offsets], color=["red", "green"])
+        plt.title("Net Emissions Overview")
+        plt.ylabel("Values")
+
+        # Save the plot to a temporary file
+        with NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            plt.savefig(temp_file.name, format='png')
+            pdf.image(temp_file.name, x=10, y=80, w=190)
+
+        plt.close()  # Close the plot to release memory
+
+        # Save the PDF to a file
+        file_path = f"industry_summary_report.pdf"
+        pdf.output(file_path)
+
+        return send_file(file_path, as_attachment=True)
+
+    except Exception as e:
+        flash(f"Error: {e}", "danger")
+        return "Error generating report."
+
+    finally:
+        cursor.close()
+        connection.close()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Adjust for your system
+     app.run(debug=True)
+    

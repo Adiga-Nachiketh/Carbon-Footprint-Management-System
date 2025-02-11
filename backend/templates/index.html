@@ -34,6 +34,14 @@
   * Author: BootstrapMade.com
   * License: https://bootstrapmade.com/license/
   ======================================================== -->
+  <script>
+    // Check if the 'warned' flag is passed and show the pop-up if True
+    {% if warned %}
+        window.onload = function() {
+            alert("Transportation value is off limits and must be reduced.");
+        };
+    {% endif %}
+</script>
 </head>
 
 <body class="index-page">
@@ -44,7 +52,7 @@
       <a href="index.html" class="logo d-flex align-items-center me-auto me-lg-0">
         <!-- Uncomment the line below if you also wish to use an image logo -->
         <!-- <img src="static/img/logo.png" alt=""> -->
-        <h1 class="sitename">GM</h1>
+        <h1 class="sitename">Carbon Footprint</h1>
         <span>.</span>
       </a>
 
@@ -57,8 +65,8 @@
                 <ul>
                   <li><a href="admin_login">Admin</a></li>
                   <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                  <li><a href="auditor_signup">Auditor</a></li>
-                  <li><a href="#">Publice User</a></li>
+                  
+                  <!-- <li><a href="#">Publice User</a></li> -->
                 </ul>
           </li>
         </ul>
@@ -131,7 +139,23 @@
               <h3><a href="{{ url_for('trans') }}">Transportation</a></h3>
             </div>
           </div>
-        
+          <div class="col-xl-2 col-md-4" data-aos="fade-up" data-aos-delay="600">
+            <div class="text-center">
+              <a href="industry_summary/1" class="btn mb-2" style="background-color: black; color: white; opacity: 0.8;">View</a>
+            </div>
+            <div class="icon-box">
+              <i class="bi bi-card-list"></i>
+              <h3><a href="industry_summary">Industry Summary</a></h3>
+            </div>
+          </div>
+          <!-- <div class="col-md-4">
+            <div class="icon-box">
+                <h3><a href="industry_summary/1">Industry Summary</a></h3>
+                <a href="industry_summary/1" class="btn btn-primary">View</a>
+            </div>
+        </div>
+    </div>
+         -->
           <!-- Emission Source -->
           <div class="col-xl-2 col-md-4" data-aos="fade-up" data-aos-delay="700">
             <div class="text-center">
@@ -186,13 +210,13 @@
         <div class="row gy-4">
           <div class="col-lg-4 col-md-6 footer-about">
             <a href="index.html" class="logo d-flex align-items-center">
-              <span class="sitename">GP</span>
+              <span class="sitename">Carbon Footprint</span>
             </a>
             <div class="footer-contact pt-3">
-              <p>A108 Adam Street</p>
-              <p>New York, NY 535022</p>
-              <p class="mt-3"><strong>Phone:</strong> <span>+1 5589 55488 55</span></p>
-              <p><strong>Email:</strong> <span>info@example.com</span></p>
+              <p>RV College of Enginnering </p>
+              <p>Mysore Road, 560059</p>
+              <p class="mt-3"><strong>Phone:</strong> <span>+91 8317313140</span></p>
+              <p><strong>Email:</strong> <span>ovsnithin@gmail.com</span></p>
             </div>
             <div class="social-links d-flex mt-4">
               <a href=""><i class="bi bi-twitter-x"></i></a>

@@ -54,7 +54,7 @@
         <div class="container-fluid container-xl position-relative d-flex align-items-center justify-content-between">
     
           <a href="{{ url_for('index') }}" class="logo d-flex align-items-center me-auto me-lg-0">
-            <h1 class="sitename">GP</h1>
+            <h1 class="sitename">Carbon Footprint</h1>
             <span>.</span>
           </a>
     
@@ -67,8 +67,8 @@
                     <ul>
                       <li><a href="{{ url_for('admin_login') }}">Admin</a></li>
                       <li><a href="{{ url_for('signup') }}">Industry Manager</a></li>
-                      <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
-                      <li><a href="#">Public User</a></li>
+                      <!-- <li><a href="{{ url_for('auditor_signup') }}">Auditor</a></li>
+                      <li><a href="#">Public User</a></li> -->
                     </ul>
               </li>
             </ul>
@@ -80,7 +80,7 @@
         </div>
       </header>
     <div class="container form-container">
-        <h2 class="form-header">Login-in</h2>
+        <h2 class="form-header">Login</h2>
                 <!-- Flash message display section -->
                 {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
@@ -110,8 +110,7 @@
                       <select class="form-control" id="role" name="role" required>
                           <option value="admin" data-role-id="1">Admin</option>
                           <option value="industry_manager" data-role-id="2">Industry Manager</option>
-                          <option value="auditor" data-role-id="3">Auditor</option>
-                          <option value="public_user" data-role-id="4">Public User</option>
+                          
                       </select>
                   </div>
                   <input type="hidden" name="role_id" id="role_id"> <!-- Hidden field for role_id -->

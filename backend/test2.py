@@ -11,7 +11,7 @@ app.secret_key = 'your_secret_key'
 app.config['MYSQL_HOST'] = 'localhost'
 app.config['MYSQL_DATABASE'] = 'icfms'  # Your database name
 app.config['MYSQL_USER'] = 'root'  # Your MySQL username
-app.config['MYSQL_PASSWORD'] = 'Gagan@2004'  # Your MySQL password
+app.config['MYSQL_PASSWORD'] = 'nunez'  # Your MySQL password
 
 # Create a connection
 def get_db_connection():
